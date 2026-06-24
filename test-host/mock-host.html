@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BNWAS artifact — mock host</title>
+  <!-- The real artifact stylesheet, exactly as Seafarer would load it -->
+  <link rel="stylesheet" href="../dist/plugins/bnwas-time-anchor/index.css">
+  <style>
+    body { margin: 0; background: #0b0f17; color: #cbd5e1; font-family: system-ui, sans-serif; padding: 16px; }
+    body.host-light { background: #eef1f6; color: #1f2937; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; font-size: 13px; }
+    .toolbar button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #475569; background: transparent; color: inherit; cursor: pointer; }
+    .pill { padding: 2px 8px; border-radius: 6px; background: #1e293b; color: #93c5fd; font-size: 11px; }
+    .pill.bad { background: #7f1d1d; color: #fecaca; }
+    .pill.good { background: #14532d; color: #bbf7d0; }
+    #log { font-family: ui-monospace, monospace; font-size: 11px; opacity: .7; margin-top: 12px; white-space: pre-wrap; }
+    #mount { /* host gives the plugin a plain container */ }
+    .hidechrome .toolbar, .hidechrome #log, .hidechrome .meta-line { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <span class="pill">MOCK HOST</span>
+    <span>title: <b id="title">—</b></span>
+    <button id="btnMount" type="button">Mount</button>
+    <button id="btnUnmount" type="button">Unmount</button>
+    <button id="btnTheme" type="button">Toggle theme</button>
+    <button id="btnExpire" type="button">Force expire</button>
+    <button id="btnAck" type="button">Acknowledge</button>
+    <span id="net" class="pill good">net: 0</span>
+    <span id="audio" class="pill">audio: idle</span>
+  </div>
+
+  <div id="mount"></div>
+  <div id="log"></div>
+
+  <script>
+    // -------- optional fixed layout viewport (for phone-width screenshots) --------
+    (function () {
+      var vw = new URLSearchParams(location.search).get('vw');
+      if (vw) {
+        var m = document.querySelector('meta[name="viewport"]') || document.createElement('meta');
+        m.name = 'viewport';
+        m.content = 'width=' + vw + ', initial-scale=1';
+        document.head.appendChild(m);
+      }
+    })();
+
+    // -------- test harness opt-in (exposes plugin.__test) --------
+    window.__SKIPI_PLUGIN_TEST__ = true;
+
+    // -------- network guard: record ANY outbound attempt --------
+    var NET = [];
+    function logNet(kind, arg) { NET.push(kind + ' ' + arg); paintNet(); log('BLOCKED network: ' + kind + ' ' + arg); }
+    window.fetch = function (u) { logNet('fetch', u); return Promise.reject(new Error('network blocked in mock host')); };
+    function BlockedXHR() {}
+    BlockedXHR.prototype.open = function (m, u) { logNet('xhr', u); };
+    BlockedXHR.prototype.send = function () {};
+    BlockedXHR.prototype.setRequestHeader = function () {};
+    window.XMLHttpRequest = BlockedXHR;
+    window.WebSocket = function (u) { logNet('ws', u); throw new Error('blocked'); };
+    window.EventSource = function (u) { logNet('sse', u); throw new Error('blocked'); };
+    if (navigator.sendBeacon) navigator.sendBeacon = function (u) { logNet('beacon', u); return false; };
+
+    function paintNet() {
+      var n = document.getElementById('net');
+      n.textContent = 'net: ' + NET.length;
+      n.className = 'pill ' + (NET.length ? 'bad' : 'good');
+    }
+    function log(m) {
+      var l = document.getElementById('log');
+      l.textContent += (l.textContent ? '\n' : '') + m;
+    }
+
+    // -------- mock hostApi (only the declared capabilities) --------
+    var store = {};
+    var themeState = 'dark';
+    var themeSubs = [];
+    var audioState = 'idle';
+    function paintAudio() { document.getElementById('audio').textContent = 'audio: ' + audioState; }
+
+    var hostApi = {
+      theme: {
+        get: function () { return themeState; },
+        subscribe: function (cb) { themeSubs.push(cb); return function () { themeSubs = themeSubs.filter(function (f) { return f !== cb; }); }; }
+      },
+      storage: {
+        get: function (k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+        set: function (k, v) { store[k] = String(v); },
+        remove: function (k) { delete store[k]; }
+      },
+      // PR #4: audio is a no-op stub; plugin must do its own Web Audio. We just record.
+      audio: {
+        playLoop: function () { audioState = 'host.playLoop (no-op)'; paintAudio(); },
+        stop: function () { audioState = 'host.stop (no-op)'; paintAudio(); }
+      },
+      navigation: {
+        closePlugin: function () { log('host.navigation.closePlugin()'); },
+        setTitle: function (t) { document.getElementById('title').textContent = t; }
+      },
+      permissions: {
+        listGranted: function () { return ['local_storage', 'audio_alert']; }
+      }
+    };
+
+    function setHostTheme(t) {
+      themeState = t;
+      document.body.classList.toggle('host-light', t === 'light');
+      themeSubs.forEach(function (cb) { try { cb(t); } catch (e) {} });
+    }
+
+    function plugin() { return window.SkipiPlugins && window.SkipiPlugins['bnwas-time-anchor']; }
+    function test() { var p = plugin(); return p && p.__test; }
+
+    function doMount() {
+      var p = plugin();
+      if (!p) { log('ERROR: plugin not registered'); return; }
+      p.mount(document.getElementById('mount'), hostApi);
+      log('mount() called → manifest ' + p.manifest.id + ' v' + p.manifest.version);
+    }
+    function doUnmount() {
+      var p = plugin();
+      if (p) { p.unmount(); log('unmount() called → container children: ' + document.getElementById('mount').children.length); }
+    }
+
+    // -------- wire toolbar --------
+    window.addEventListener('DOMContentLoaded', function () {
+      document.getElementById('btnMount').onclick = doMount;
+      document.getElementById('btnUnmount').onclick = doUnmount;
+      document.getElementById('btnTheme').onclick = function () { setHostTheme(themeState === 'dark' ? 'light' : 'dark'); };
+      document.getElementById('btnExpire').onclick = function () { var t = test(); if (t) t.forceExpire(); };
+      document.getElementById('btnAck').onclick = function () { var t = test(); if (t) t.acknowledge(); };
+    });
+
+    // -------- load the real artifact, then apply optional scene --------
+    var s = document.createElement('script');
+    s.src = '../dist/plugins/bnwas-time-anchor/index.js';
+    s.onload = function () {
+      var q = new URLSearchParams(location.search);
+      if (q.get('chrome') === '0') document.body.classList.add('hidechrome');
+      var theme = q.get('theme');
+      if (theme === 'light') setHostTheme('light');
+
+      doMount();
+
+      // tick the audio indicator from the plugin's own alarm loop state
+      setInterval(function () {
+        var t = test(); if (!t) return;
+        var on = t.isAlarmAudioActive();
+        if (on && audioState.indexOf('ALARM') < 0) { audioState = 'ALARM (web audio)'; paintAudio(); }
+        else if (!on && audioState.indexOf('ALARM') >= 0) { audioState = 'idle'; paintAudio(); }
+      }, 250);
+
+      var scene = q.get('scene') || 'idle';
+      var t = test();
+      if (!t) return;
+      if (scene === 'running') { t.setIntervalSeconds(167); t.startWatch(); }
+      else if (scene === 'alarm') { t.setIntervalSeconds(167); t.startWatch(); t.forceExpire(); }
+      else if (scene === 'alarm2') { t.setIntervalSeconds(167); t.startWatch(); t.forceExpire(); t.forceEscalate(); }
+      else if (scene === 'ack') { t.setIntervalSeconds(167); t.startWatch(); t.forceExpire(); t.acknowledge(); }
+    };
+    document.body.appendChild(s);
+  </script>
+</body>
+</html>

@@ -1,4 +1,8 @@
 node_modules/
 .DS_Store
-dist/
 reports/
+
+# The reviewed bundled artifact is version-controlled (host consumes it + checksums).
+# Ignore only transient build scratch, not the published plugin artifact.
+dist/*
+!dist/plugins/

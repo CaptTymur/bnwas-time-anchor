@@ -153,6 +153,22 @@
       justify-content: center;
       flex-wrap: wrap;
     }
+
+    /* During alarm, make the acknowledge button dominate */
+    .bnwas.alarming .controls {
+      flex-direction: column;
+      align-items: center;
+    }
+    .bnwas.alarming button.acknowledge {
+      width: 100%;
+      max-width: 420px;
+    }
+    .bnwas.alarming button.outline {
+      font-size: 13px;
+      padding: 6px 12px;
+      min-height: 36px;
+      opacity: 0.6;
+    }
     button {
       padding: 12px 20px;
       font-size: 15px;
@@ -163,6 +179,7 @@
       color: inherit;
       cursor: pointer;
       min-width: 160px;
+      min-height: 48px;
     }
     button.accent {
       background: var(--accent);
@@ -173,6 +190,21 @@
       animation: pulse 1s infinite;
       background: var(--danger);
       border-color: var(--danger);
+    }
+
+    /* Big easy-to-tap acknowledge button */
+    button.acknowledge {
+      font-size: 26px;
+      padding: 22px 44px;
+      min-height: 82px;
+      min-width: 260px;
+      border-radius: 14px;
+      font-weight: 800;
+    }
+    .alarm-level-2 button.acknowledge {
+      font-size: 28px;
+      min-height: 92px;
+      padding: 24px 48px;
     }
     @keyframes pulse {
       0%,100% { transform: scale(1); }
@@ -417,6 +449,7 @@
       const runner = getRunner();
       const isNight = state.nightMode;
       runner.classList.toggle('night', isNight);
+      runner.classList.toggle('alarming', state.stage === 'alarming');
       runner.classList.toggle('alarm-level-2', state.stage === 'alarming' && state.alarmLevel === 2);
 
       getStatus().textContent = 
@@ -518,8 +551,8 @@
       } else {
         const ack = document.createElement('button');
         const isAlarm = state.stage === 'alarming';
-        ack.className = 'accent' + (isAlarm ? ' alerting' : '');
-        ack.textContent = isAlarm ? (state.alarmLevel === 2 ? 'ACKNOWLEDGE (AGGRESSIVE)' : 'Acknowledge') : 'I am here · reset';
+        ack.className = 'accent' + (isAlarm ? ' alerting' : '') + ' acknowledge';
+        ack.textContent = isAlarm ? (state.alarmLevel === 2 ? 'Я ЗДЕСЬ (ТРЕВОГА)' : 'Я здесь') : 'Я здесь · сброс';
         ack.onclick = acknowledge;
         el.appendChild(ack);
 

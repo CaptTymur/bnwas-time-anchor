@@ -8,8 +8,11 @@
   "hosts": ["seafarer", "onboard"],
   "entrypoints": {
     "lab": "test-host/index.html",
-    "ui": "dist/index.html"
+    "mock_host": "test-host/mock-host.html",
+    "ui": "dist/plugins/bnwas-time-anchor/index.js",
+    "style": "dist/plugins/bnwas-time-anchor/index.css"
   },
+  "artifact": "dist/plugins/bnwas-time-anchor/",
   "permissions": [],
   "capabilities": {
     "audio": "local",

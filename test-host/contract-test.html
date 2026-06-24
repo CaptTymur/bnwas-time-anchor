@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BNWAS artifact — contract test</title>
+  <link rel="stylesheet" href="../dist/plugins/bnwas-time-anchor/index.css">
+  <style>
+    body { font-family: ui-monospace, monospace; background: #0b0f17; color: #cbd5e1; padding: 16px; }
+    .ok { color: #4ade80; } .fail { color: #f87171; }
+    #result { font-size: 18px; font-weight: 700; margin-bottom: 10px; }
+    #mount { margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <div id="result">RUNNING…</div>
+  <pre id="lines"></pre>
+  <div id="mount"></div>
+
+  <script>
+    window.__SKIPI_PLUGIN_TEST__ = true;
+
+    // network guard
+    var NET = [];
+    window.fetch = function (u) { NET.push('fetch ' + u); return Promise.reject(new Error('blocked')); };
+    function XHR() {} XHR.prototype.open = function (m, u) { NET.push('xhr ' + u); }; XHR.prototype.send = function () {}; XHR.prototype.setRequestHeader = function () {};
+    window.XMLHttpRequest = XHR;
+    window.WebSocket = function (u) { NET.push('ws ' + u); throw new Error('blocked'); };
+    window.EventSource = function (u) { NET.push('sse ' + u); throw new Error('blocked'); };
+    if (navigator.sendBeacon) navigator.sendBeacon = function (u) { NET.push('beacon ' + u); return false; };
+
+    var results = [];
+    function check(name, cond) { results.push({ name: name, ok: !!cond }); }
+    function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+    // mock host: light theme, in-memory storage
+    var store = {};
+    var hostAudio = [];
+    var hostApi = {
+      theme: { get: function () { return 'light'; }, subscribe: function () { return function () {}; } },
+      storage: {
+        get: function (k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+        set: function (k, v) { store[k] = String(v); },
+        remove: function (k) { delete store[k]; }
+      },
+      audio: { playLoop: function () { hostAudio.push('play'); }, stop: function () { hostAudio.push('stop'); } },
+      navigation: { closePlugin: function () {}, setTitle: function () {} },
+      permissions: { listGranted: function () { return ['local_storage', 'audio_alert']; } }
+    };
+
+    function plugin() { return window.SkipiPlugins && window.SkipiPlugins['bnwas-time-anchor']; }
+
+    function finish() {
+      var passed = results.filter(function (r) { return r.ok; }).length;
+      var total = results.length;
+      var allOk = passed === total;
+      document.getElementById('result').textContent = (allOk ? 'PASS ' : 'FAIL ') + passed + '/' + total;
+      document.getElementById('result').className = allOk ? 'ok' : 'fail';
+      document.title = (allOk ? 'PASS ' : 'FAIL ') + passed + '/' + total;
+      document.getElementById('lines').innerHTML = results.map(function (r) {
+        return (r.ok ? '<span class="ok">PASS</span> ' : '<span class="fail">FAIL</span> ') + r.name;
+      }).join('\n');
+      window.__TEST_DONE__ = true;
+      window.__TEST_SUMMARY__ = { passed: passed, total: total, results: results };
+    }
+
+    async function run() {
+      var p = plugin();
+      check('plugin registered with short key', !!p);
+      check('exposes manifest/mount/unmount', p && p.manifest && typeof p.mount === 'function' && typeof p.unmount === 'function');
+      check('manifest id is full id', p && p.manifest && p.manifest.id === 'app.skipi.plugins.bnwas-time-anchor');
+      check('manifest declares network none', p && p.manifest && p.manifest.capabilities && p.manifest.capabilities.network === 'none');
+
+      var container = document.getElementById('mount');
+      p.mount(container, hostApi);
+      var t = p.__test;
+      check('test handle present after opt-in mount', !!t);
+      check('UI rendered into container', !!container.querySelector('.skipi-bnwas'));
+      check('host light theme applied to root', t && t.snapshot().themeLight === true);
+
+      // real countdown -> alarm
+      t.setIntervalSeconds(2);
+      t.startWatch();
+      await wait(2600);
+      check('countdown reaches alarm at expiry', t.snapshot().stage === 'alarming');
+      check('alarm audio loop active', t.isAlarmAudioActive() === true);
+
+      // alarm persists until acknowledge
+      await wait(1500);
+      check('alarm persists until acknowledge', t.snapshot().stage === 'alarming' && t.isAlarmAudioActive());
+
+      // acknowledge stops alarm and arms next cycle
+      t.acknowledge();
+      check('acknowledge stops alarm audio', t.isAlarmAudioActive() === false);
+      check('acknowledge arms next cycle (watching)', t.snapshot().stage === 'watching');
+      check('cycle counter incremented to 1', t.snapshot().cycles === 1);
+
+      // forced expiry + escalation
+      t.forceExpire();
+      check('expiry enters alarm again', t.snapshot().stage === 'alarming');
+      t.forceEscalate();
+      check('escalates to aggressive level 2', t.snapshot().alarmLevel === 2);
+      check('level-2 alarm audio active', t.isAlarmAudioActive() === true);
+      t.acknowledge();
+      check('second cycle counted', t.snapshot().cycles === 2);
+
+      // privacy
+      check('no network calls made', NET.length === 0);
+      check('plugin did not depend on host audio stub', hostAudio.length === 0);
+
+      // unmount tears everything down
+      p.unmount();
+      check('test handle removed after unmount', !p.__test);
+      check('container emptied after unmount', container.children.length === 0);
+
+      // re-mount works (idempotent)
+      p.mount(container, hostApi);
+      check('re-mount renders again', !!container.querySelector('.skipi-bnwas'));
+      p.unmount();
+
+      finish();
+    }
+
+    var s = document.createElement('script');
+    s.src = '../dist/plugins/bnwas-time-anchor/index.js';
+    s.onload = function () { run().catch(function (e) { check('uncaught error: ' + e.message, false); finish(); }); };
+    s.onerror = function () { check('artifact index.js failed to load', false); finish(); };
+    document.body.appendChild(s);
+  </script>
+</body>
+</html>

@@ -23,15 +23,35 @@ Or simply open `test-host/index.html` directly in any browser.
 - [x] Visible cycle counter + total watch time
 - [x] Day / Night mode (theming + flash behavior)
 - [x] Strong visible safety disclaimer
-- [ ] No network calls
-- [ ] No access to documents / vault
-- [ ] Works at desktop and phone-ish widths
+- [x] No network calls (static grep + runtime monkeypatch: 0 calls)
+- [x] No access to documents / vault
+- [x] Works at desktop and phone-ish widths
+
+## Bundled artifact (for Seafarer PR #4)
+
+The host-consumable artifact lives at:
+
+```text
+dist/plugins/bnwas-time-anchor/
+  plugin.json   index.js   index.css   assets/   checksums.json   CHANGELOG.md   REPORT.md
+```
+
+It registers `window.SkipiPlugins["bnwas-time-anchor"] = { manifest, mount, unmount }`.
+
+Test the artifact in a mock host:
+
+```bash
+cd test-host
+python3 -m http.server 8765
+# mock host:      http://localhost:8765/mock-host.html
+# contract test:  http://localhost:8765/contract-test.html  (prints PASS n/n)
+```
 
 ## Next steps (after lab is stable)
 
-- Move to `dist/` as the artifact
-- Add manifest-driven install simulation
-- Host integration checks in Skipi Seafarer
+- [x] Move artifact under `dist/plugins/bnwas-time-anchor/`
+- [ ] Seafarer copies the artifact into its `dist/plugins/` and wires Install → Open (separate handoff)
+- [ ] Host integration smoke in Skipi Seafarer
 
 ## Safety (never remove)
 
