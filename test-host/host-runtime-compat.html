@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BNWAS host-runtime compat</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0b0f17;
+      color: #cbd5e1;
+      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      padding: 16px;
+    }
+    #result { font-size: 18px; font-weight: 800; margin-bottom: 10px; }
+    .ok { color: #4ade80; }
+    .fail { color: #f87171; }
+    #mount { margin-top: 14px; border: 1px solid #273244; min-height: 40px; }
+  </style>
+  <script src="../../_host-runtime/dist/plugin-host-bridge.js"></script>
+</head>
+<body>
+  <div id="result">RUNNING</div>
+  <pre id="lines"></pre>
+  <div id="mount"></div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var SLUG = 'bnwas-time-anchor';
+      var BASE = '../dist/plugins/bnwas-time-anchor/';
+      var SECRET_KEY = 'skipi_session_token';
+      var SECRET_VAL = 'SECRET-BNWAS-HOST-RUNTIME-COMPAT-DO-NOT-LEAK';
+      var results = [];
+      var storageLog = [];
+      var navTitle = '';
+      var debugLog = [];
+      var wireLog = [];
+
+      window.addEventListener('message', function (ev) {
+        var m = ev.data || {};
+        if (m.ch === 'skipi-plugin') wireLog.push({ type: m.type, hasToken: !!m.token, key: m.key || null });
+      });
+
+      function check(name, cond) { results.push({ name: name, ok: !!cond }); }
+      function debug(name, value) {
+        try { debugLog.push(name + ': ' + JSON.stringify(value)); }
+        catch (e) { debugLog.push(name + ': ' + String(value)); }
+      }
+      function wait(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+      function waitFor(fn, timeoutMs) {
+        var start = Date.now();
+        return new Promise(function (resolve) {
+          (function poll() {
+            if (fn()) { resolve(true); return; }
+            if (Date.now() - start > timeoutMs) { resolve(false); return; }
+            setTimeout(poll, 50);
+          })();
+        });
+      }
+      function finish() {
+        var passed = results.filter(function (r) { return r.ok; }).length;
+        var total = results.length;
+        var ok = passed === total;
+        document.getElementById('result').textContent = (ok ? 'PASS ' : 'FAIL ') + passed + '/' + total;
+        document.getElementById('result').className = ok ? 'ok' : 'fail';
+        document.title = (ok ? 'PASS ' : 'FAIL ') + passed + '/' + total;
+        document.getElementById('lines').innerHTML = results.map(function (r) {
+          return (r.ok ? '<span class="ok">PASS</span> ' : '<span class="fail">FAIL</span> ') + r.name;
+        }).join('\n') + (debugLog.length ? '\n\nDEBUG\n' + debugLog.join('\n') : '');
+        window.__TEST_DONE__ = true;
+        window.__TEST_SUMMARY__ = { passed: passed, total: total, results: results };
+      }
+
+      function hex(buf) {
+        var a = new Uint8Array(buf), s = '';
+        for (var i = 0; i < a.length; i++) s += ('0' + a[i].toString(16)).slice(-2);
+        return s;
+      }
+      function sha256Hex(buf) {
+        return crypto.subtle.digest('SHA-256', buf).then(hex);
+      }
+      function fetchBuffer(path) {
+        return fetch(BASE + path, { cache: 'no-store' }).then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + path);
+          return r.arrayBuffer();
+        });
+      }
+      function decode(buf) { return new TextDecoder('utf-8').decode(buf); }
+
+      function makeBnwasLoader(corrupt) {
+        return {
+          install: function (slug) {
+            if (slug !== SLUG) return Promise.resolve({ ok: false, stage: 'install', reason: 'unexpected slug' });
+            return Promise.all([
+              fetchBuffer('plugin.json'),
+              fetchBuffer('index.js'),
+              fetchBuffer('index.css'),
+              fetchBuffer('checksums.json')
+            ]).then(function (parts) {
+              var manifest = JSON.parse(decode(parts[0]));
+              var sums = JSON.parse(decode(parts[3]));
+              var jsBuf = corrupt ? new Blob([parts[1], '// tamper']).arrayBuffer() : Promise.resolve(parts[1]);
+              return jsBuf.then(function (actualJsBuf) {
+                return Promise.all([
+                  sha256Hex(parts[0]),
+                  sha256Hex(actualJsBuf),
+                  sha256Hex(parts[2])
+                ]).then(function (hashes) {
+                  var ok = hashes[0] === sums.files['plugin.json'].sha256 &&
+                    hashes[1] === sums.files['index.js'].sha256 &&
+                    hashes[2] === sums.files['index.css'].sha256;
+                  if (!ok) return { ok: false, stage: 'integrity', reason: 'checksum mismatch' };
+                  return {
+                    ok: true,
+                    source: 'bnwas-artifact/checksum',
+                    pack: {
+                      id: manifest.id,
+                      slug: manifest.slug,
+                      name: manifest.name,
+                      version: manifest.version,
+                      entrypoints: manifest.entrypoints || { ui: 'index.js', style: 'index.css' },
+                      permissions: (manifest.permissions || []).slice(),
+                      capabilities: manifest.capabilities || {},
+                      safety: manifest.safety || {},
+                      files: {
+                        'index.js': decode(actualJsBuf),
+                        'index.css': decode(parts[2])
+                      }
+                    }
+                  };
+                });
+              });
+            });
+          }
+        };
+      }
+
+      function makeHost() {
+        var store = {};
+        try { localStorage.setItem(SECRET_KEY, SECRET_VAL); } catch (e) {}
+        return {
+          id: 'plugin-lab-host-runtime-compat',
+          storage: {
+            get: function (slug, key) {
+              storageLog.push('get ' + slug + ' ' + key);
+              return Object.prototype.hasOwnProperty.call(store, slug + ':' + key) ? store[slug + ':' + key] : null;
+            },
+            set: function (slug, key, value) {
+              storageLog.push('set ' + slug + ' ' + key);
+              store[slug + ':' + key] = String(value);
+            },
+            remove: function (slug, key) {
+              storageLog.push('remove ' + slug + ' ' + key);
+              delete store[slug + ':' + key];
+            }
+          },
+          theme: { get: function () { return 'light'; }, subscribe: function () { return function () {}; } },
+          navigation: { setTitle: function (title) { navTitle = title; }, closePlugin: function () {} }
+        };
+      }
+
+      async function run() {
+        check('shared runtime exposes SkipiPluginRuntime.create', !!(window.SkipiPluginRuntime && typeof window.SkipiPluginRuntime.create === 'function'));
+
+        var mount = document.getElementById('mount');
+        var rt = window.SkipiPluginRuntime.create({
+          enabled: true,
+          loader: makeBnwasLoader(false),
+          host: makeHost(),
+          bridgeTimeoutMs: 8000
+        });
+        var opened = rt.open(SLUG, mount);
+        var iframe = mount.querySelector('iframe');
+        check('open creates iframe synchronously', !!iframe);
+        check('iframe sandbox is allow-scripts only', iframe && iframe.getAttribute('sandbox') === 'allow-scripts');
+        check('iframe omits allow-same-origin', iframe && String(iframe.getAttribute('sandbox')).indexOf('allow-same-origin') < 0);
+        check('iframe srcdoc carries strict CSP', iframe && iframe.getAttribute('srcdoc').indexOf("default-src 'none'") >= 0 && iframe.getAttribute('srcdoc').indexOf("connect-src 'none'") >= 0);
+        check('host secret is not in frame srcdoc', iframe && iframe.getAttribute('srcdoc').indexOf(SECRET_VAL) < 0);
+
+        var res = await opened;
+        debug('open result', res);
+        debug('runtime dbg', rt._dbg ? rt._dbg() : null);
+        debug('runtime audit', rt._audit ? rt._audit() : null);
+        debug('wireLog', wireLog);
+        check('BNWAS artifact mounts through current host runtime', res && res.ok === true);
+        check('frame selfcheck: no parent DOM', res && res.selfcheck && res.selfcheck.parentDomAccess === false);
+        check('frame selfcheck: storage blocked in frame', res && res.selfcheck && res.selfcheck.storageBlocked === true);
+        check('frame selfcheck: network blocked by CSP', res && res.selfcheck && res.selfcheck.fetchBlocked === true);
+
+        await waitFor(function () { return navTitle === 'BNWAS / Time Anchor'; }, 1500);
+        debug('navTitle', navTitle);
+        debug('storageLog', storageLog);
+        check('plugin can set host title via bridge', navTitle === 'BNWAS / Time Anchor');
+        check('plugin used host-side namespaced storage bridge', storageLog.some(function (x) { return x === 'get ' + SLUG + ' bnwas.settings'; }));
+        check('host secret remains in host localStorage only', localStorage.getItem(SECRET_KEY) === SECRET_VAL);
+
+        rt.close();
+        await wait(100);
+        check('runtime close removes active frame', rt._active() === null && mount.querySelector('iframe') === null);
+
+        var badMount = document.createElement('div');
+        document.body.appendChild(badMount);
+        var rtBad = window.SkipiPluginRuntime.create({
+          enabled: true,
+          loader: makeBnwasLoader(true),
+          host: makeHost(),
+          bridgeTimeoutMs: 2000
+        });
+        var bad = await rtBad.open(SLUG, badMount);
+        check('tampered BNWAS artifact fails closed at integrity', bad && bad.ok === false && bad.stage === 'integrity');
+        check('failed integrity mount leaves no active frame', rtBad._active() === null);
+
+        var offMount = document.createElement('div');
+        document.body.appendChild(offMount);
+        var rtOff = window.SkipiPluginRuntime.create({ enabled: false, loader: makeBnwasLoader(false), host: makeHost() });
+        var off = await rtOff.open(SLUG, offMount);
+        check('disabled runtime returns stage flag', off && off.ok === false && off.stage === 'flag');
+        check('disabled runtime creates no frame', offMount.querySelector('iframe') === null);
+      }
+
+      window.addEventListener('load', function () {
+        run().catch(function (e) { check('uncaught error: ' + e.message, false); }).then(finish);
+      });
+    })();
+  </script>
+</body>
+</html>
